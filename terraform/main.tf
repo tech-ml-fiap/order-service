@@ -3,6 +3,10 @@
 ########################################
 data "aws_caller_identity" "current" {}
 
+resource "aws_ecs_cluster" "order_service_cluster" {
+  name = var.cluster_name
+}
+
 ########################################
 # 1.  Repositório ECR
 ########################################
