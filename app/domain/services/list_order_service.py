@@ -7,7 +7,9 @@ class ListOrdersService:
     def __init__(self, repo: OrderRepositoryPort):
         self.repo = repo
 
-    def execute(self, status: Optional[OrderStatus] = None):
+    def execute(self, status: Optional[OrderStatus] = None, prioritized: bool = False):
+        if prioritized and status is None:
+            return self.repo.find_active_sorted_orders()
         return self.repo.find_all(status=status)
 
 class GetOrderByIdService:

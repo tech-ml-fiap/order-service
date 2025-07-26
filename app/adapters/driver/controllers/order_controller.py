@@ -53,6 +53,20 @@ def list_orders(
     return [_to_out(o) for o in orders]
 
 
+@router.get(
+    "/orders/active",
+    response_model=List[OrderOut],
+    summary="Listar pedidos ativos por prioridade",
+    description="Retorna pedidos ativos que ainda não foram finalizados, ordenados por prioridade de status e ID."
+)
+def list_active_sorted_orders(
+    db: Session = Depends(get_db_session),
+):
+    orders = ListOrdersService(OrderRepository(db)).execute(prioritized=True)
+    return [_to_out(o) for o in orders]
+
+
+
 @router.get("/orders/{order_id}", response_model=OrderOut, status_code=200)
 def get_order_by_id(
     order_id: int,
