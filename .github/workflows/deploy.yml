@@ -1,0 +1,68 @@
+name: Deploy AWS – Order-Service
+
+on:
+  push:
+    branches: [main]
+
+env:
+  AWS_REGION: us-east-1
+  CLUSTER_NAME: order-service-cluster
+  SERVICE_NAME: order-service
+  IMAGE_TAG: latest
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-session-token:     ${{ secrets.AWS_SESSION_TOKEN }}
+        aws-region:            ${{ env.AWS_REGION }}
+
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v2
+      with:
+        terraform_version: 1.5.7
+
+    - name: Init & Apply
+      run: |
+        terraform -chdir=terraform init
+        terraform -chdir=terraform apply -auto-approve
+
+    - name: Export ECR URL (Terraform output)
+      id: tfout
+      run: |
+        echo "REPO_URL=$(terraform -chdir=terraform output -raw ecr_repository_url)" >> "$GITHUB_ENV"
+
+    - name: Login to ECR
+      run: |
+        aws ecr get-login-password --region $AWS_REGION | \
+        docker login --username AWS --password-stdin "$REPO_URL"
+
+    - name: Build & Push Docker image
+      run: |
+        docker build -t "$REPO_URL:$IMAGE_TAG" .
+        docker push "$REPO_URL:$IMAGE_TAG"
+
+    - name: Force new ECS deployment
+      run: |
+        aws ecs update-service \
+          --cluster "$CLUSTER_NAME" \
+          --service "$SERVICE_NAME" \
+          --force-new-deployment \
+          --region "$AWS_REGION"
+
+    - name: Check service status
+      run: |
+        aws ecs describe-services \
+          --cluster "$CLUSTER_NAME" \
+          --services "$SERVICE_NAME" \
+          --region "$AWS_REGION" \
+          --query 'services[0].deployments'
