@@ -81,7 +81,7 @@ resource "aws_ecs_task_definition" "order_service" {
       name  = "order-service"
       image = local.image_uri
       essential = true
-      portMappings = [{ containerPort = 80, protocol = "tcp" }]
+      portMappings = [{ containerPort = 8001, protocol = "tcp" }]
       logConfiguration = {
         logDriver = "awslogs"
         options = {
