@@ -20,4 +20,4 @@ class OrderModel(BaseModel):
     # coupon = relationship("CouponModel")
 
     def __repr__(self):
-        return f"<OrderModel(customer_id={self.client_id}, status={self.status}, coupon={self.coupon})>"
+        return f"<OrderModel(customer_id={self.client_id}, status={self.status})>"
