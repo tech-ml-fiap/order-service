@@ -12,68 +12,62 @@ provider "aws" {
   region = var.aws_region
 }
 
+# ─────────── Identidade ───────────
 data "aws_caller_identity" "current" {}
 
-resource "aws_security_group" "app_sg" {
-  name        = "order-service-sg"
-  description = "HTTP inbound to Order-Service"
-  vpc_id      = data.aws_vpc.default.id
+# ─────────── VPC & Subnets padrão ───────────
+data "aws_vpc" "default" {
+  default = true
+}
 
-  ingress {
-    description = "HTTP"
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+data "aws_subnets" "public" {
+  filter {
+    name   = "vpc-id"
+    values = [data.aws_vpc.default.id]
   }
-
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
+  filter {
+    name   = "default-for-az"
+    values = ["true"]
   }
 }
 
-resource "aws_ecs_cluster" "order_service_cluster" {
-  name = var.cluster_name
+# ─────────── SG já existente (somente lookup) ───────────
+data "aws_security_group" "app_sg" {
+  filter {
+    name   = "group-name"
+    values = ["order-service-sg"]
+  }
+  filter {
+    name   = "vpc-id"
+    values = [data.aws_vpc.default.id]
+  }
 }
 
-resource "aws_ecr_repository" "order_service" {
-  name                 = var.repository_name
-  image_tag_mutability = "MUTABLE"
-  force_delete         = true
+# ─────────── ECR já existente (lookup) ───────────
+data "aws_ecr_repository" "order_service" {
+  name = var.repository_name   # "order-service-repo"
 }
 
 locals {
-  image_uri = "${aws_ecr_repository.order_service.repository_url}:latest"
+  image_uri = "${data.aws_ecr_repository.order_service.repository_url}:latest"
 }
 
+# ─────────── Exec-role pré-criada ───────────
 data "aws_iam_role" "ecs_execution" {
   name = "LabRole"
 }
 
-data "aws_secretsmanager_secret" "db" {
-  name = "order-service-db"
+# ─────────── Log group já criado (lookup) ───────────
+data "aws_cloudwatch_log_group" "order_logs" {
+  name = "/ecs/order-service"
 }
 
-resource "aws_iam_role_policy" "ecs_exec_secrets" {
-  role   = data.aws_iam_role.ecs_execution.name
-  policy = jsonencode({
-    Version = "2012-10-17",
-    Statement = [{
-      Effect   = "Allow",
-      Action   = ["secretsmanager:GetSecretValue"],
-      Resource = "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:order-service-db-*"
-    }]
-  })
+# ─────────── ECS Cluster (Terraform gerencia) ───────────
+resource "aws_ecs_cluster" "order_service_cluster" {
+  name = var.cluster_name      # "order-service-cluster"
 }
 
-resource "aws_cloudwatch_log_group" "order_logs" {
-  name              = "/ecs/order-service"
-  retention_in_days = 14
-}
-
+# ─────────── Task definition ───────────
 resource "aws_ecs_task_definition" "order_service" {
   family                   = "order-service"
   requires_compatibilities = ["FARGATE"]
@@ -87,47 +81,48 @@ resource "aws_ecs_task_definition" "order_service" {
       name  = "order-service"
       image = local.image_uri
       essential = true
-
-      portMappings = [{
-        containerPort = 80
-        protocol      = "tcp"
-      }]
-
+      portMappings = [{ containerPort = 80, protocol = "tcp" }]
       logConfiguration = {
         logDriver = "awslogs"
         options = {
-          awslogs-group         = aws_cloudwatch_log_group.order_logs.name
+          awslogs-group         = data.aws_cloudwatch_log_group.order_logs.name
           awslogs-region        = var.aws_region
           awslogs-stream-prefix = "ecs"
         }
       }
-
+      # se a LabRole já tiver acesso ao segredo, mantenha;
+      # senão converta para environment vars.
       secrets = [
-        { name = "DB_HOST", valueFrom = "${data.aws_secretsmanager_secret.db.arn}:DB_HOST::" },
-        { name = "DB_PORT", valueFrom = "${data.aws_secretsmanager_secret.db.arn}:DB_PORT::" },
-        { name = "DB_NAME", valueFrom = "${data.aws_secretsmanager_secret.db.arn}:DB_NAME::" },
-        { name = "DB_USER", valueFrom = "${data.aws_secretsmanager_secret.db.arn}:DB_USER::" },
-        { name = "DB_PASS", valueFrom = "${data.aws_secretsmanager_secret.db.arn}:DB_PASS::" }
+        { name = "DB_HOST", valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:order-service-db:DB_HOST::" },
+        { name = "DB_PORT", valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:order-service-db:DB_PORT::" },
+        { name = "DB_NAME", valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:order-service-db:DB_NAME::" },
+        { name = "DB_USER", valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:order-service-db:DB_USER::" },
+        { name = "DB_PASS", valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:order-service-db:DB_PASS::" }
       ]
     }
   ])
 }
 
+# ─────────── Service ───────────
 resource "aws_ecs_service" "order_service" {
   name             = "order-service"
   cluster          = aws_ecs_cluster.order_service_cluster.id
   task_definition  = aws_ecs_task_definition.order_service.arn
   desired_count    = 1
   launch_type      = "FARGATE"
-  platform_version = "1.4.0"
 
   network_configuration {
     subnets         = data.aws_subnets.public.ids
-    security_groups = [aws_security_group.app_sg.id]
+    security_groups = [data.aws_security_group.app_sg.id]
     assign_public_ip = true
   }
 
   lifecycle {
     ignore_changes = [task_definition]
   }
+}
+
+# ─────────── Outputs ───────────
+output "ecr_repository_url" {
+  value = data.aws_ecr_repository.order_service.repository_url
 }
