@@ -1,5 +1,6 @@
 from typing import List, Optional
 
+from sqlalchemy import case
 from sqlalchemy.orm import Session
 
 from app.adapters.driven.models.order import OrderModel
@@ -49,6 +50,23 @@ class OrderRepository(OrderRepositoryPort):
         if status is not None:
             q = q.filter(OrderModel.status == status)
         return [self._to_entity(m) for m in q.all()]
+
+    def find_active_sorted_orders(self) -> List[Order]:
+        status_priority = case(
+            (OrderModel.status == OrderStatus.READY, 1),
+            (OrderModel.status == OrderStatus.IN_PROGRESS, 2),
+            (OrderModel.status == OrderStatus.RECEIVED, 3),
+            else_=9999
+        )
+
+        order_models = (
+            self.db.query(OrderModel)
+            .filter(OrderModel.status != OrderStatus.COMPLETED)
+            .filter(OrderModel.active == True)
+            .order_by(status_priority, OrderModel.id.asc())
+            .all()
+        )
+        return [self._to_entity(o) for o in order_models]
 
     def find_by_client(self, client_id: int) -> List[Order]:
         q = self.db.query(OrderModel).filter(OrderModel.client_id == client_id)
