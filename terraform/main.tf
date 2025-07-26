@@ -14,21 +14,6 @@ provider "aws" {
 
 data "aws_caller_identity" "current" {}
 
-data "aws_vpc" "default" {
-  default = true
-}
-
-data "aws_subnets" "public" {
-  filter {
-    name   = "vpc-id"
-    values = [data.aws_vpc.default.id]
-  }
-  filter {
-    name   = "default-for-az"
-    values = ["true"]
-  }
-}
-
 resource "aws_security_group" "app_sg" {
   name        = "order-service-sg"
   description = "HTTP inbound to Order-Service"
