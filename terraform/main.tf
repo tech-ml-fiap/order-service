@@ -1,15 +1,59 @@
-########################################
-# 0.  Identidade da conta (já usado p/ ARNs)
-########################################
+terraform {
+  required_version = ">= 1.5"
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 6.5"
+    }
+  }
+}
+
+provider "aws" {
+  region = var.aws_region
+}
+
 data "aws_caller_identity" "current" {}
+
+data "aws_vpc" "default" {
+  default = true
+}
+
+data "aws_subnets" "public" {
+  filter {
+    name   = "vpc-id"
+    values = [data.aws_vpc.default.id]
+  }
+  filter {
+    name   = "default-for-az"
+    values = ["true"]
+  }
+}
+
+resource "aws_security_group" "app_sg" {
+  name        = "order-service-sg"
+  description = "HTTP inbound to Order-Service"
+  vpc_id      = data.aws_vpc.default.id
+
+  ingress {
+    description = "HTTP"
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
 
 resource "aws_ecs_cluster" "order_service_cluster" {
   name = var.cluster_name
 }
 
-########################################
-# 1.  Repositório ECR
-########################################
 resource "aws_ecr_repository" "order_service" {
   name                 = var.repository_name
   image_tag_mutability = "MUTABLE"
@@ -20,41 +64,18 @@ locals {
   image_uri = "${aws_ecr_repository.order_service.repository_url}:latest"
 }
 
-########################################
-# 2.  Exec-Role da task (+ política default)
-########################################
-data "aws_iam_policy_document" "ecs_task" {
-  statement {
-    actions   = ["sts:AssumeRole"]
-    principals {
-      type        = "Service"
-      identifiers = ["ecs-tasks.amazonaws.com"]
-    }
-  }
+data "aws_iam_role" "ecs_execution" {
+  name = "LabRole"
 }
 
-resource "aws_iam_role" "ecs_execution" {
-  name               = "order-service-exec-role"
-  assume_role_policy = data.aws_iam_policy_document.ecs_task.json
-}
-
-resource "aws_iam_role_policy_attachment" "ecs_exec_policy" {
-  role       = aws_iam_role.ecs_execution.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
-}
-
-########################################
-# 3.  Policy extra: acesso ao Secrets Manager
-########################################
-# Segredo com as variáveis do Postgres
 data "aws_secretsmanager_secret" "db" {
   name = "order-service-db"
 }
 
 resource "aws_iam_role_policy" "ecs_exec_secrets" {
-  role = aws_iam_role.ecs_execution.name
+  role   = data.aws_iam_role.ecs_execution.name
   policy = jsonencode({
-    Version   = "2012-10-17",
+    Version = "2012-10-17",
     Statement = [{
       Effect   = "Allow",
       Action   = ["secretsmanager:GetSecretValue"],
@@ -63,29 +84,23 @@ resource "aws_iam_role_policy" "ecs_exec_secrets" {
   })
 }
 
-########################################
-# 4.  CloudWatch Logs
-########################################
 resource "aws_cloudwatch_log_group" "order_logs" {
   name              = "/ecs/order-service"
   retention_in_days = 14
 }
 
-########################################
-# 5.  Task Definition (inclui variáveis do banco)
-########################################
 resource "aws_ecs_task_definition" "order_service" {
   family                   = "order-service"
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
   cpu                      = "256"
   memory                   = "512"
-  execution_role_arn       = aws_iam_role.ecs_execution.arn
+  execution_role_arn       = data.aws_iam_role.ecs_execution.arn
 
   container_definitions = jsonencode([
     {
-      name      = "order-service"
-      image     = local.image_uri
+      name  = "order-service"
+      image = local.image_uri
       essential = true
 
       portMappings = [{
@@ -113,9 +128,6 @@ resource "aws_ecs_task_definition" "order_service" {
   ])
 }
 
-########################################
-# 6.  ECS Service
-########################################
 resource "aws_ecs_service" "order_service" {
   name             = "order-service"
   cluster          = aws_ecs_cluster.order_service_cluster.id
