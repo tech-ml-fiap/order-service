@@ -42,6 +42,18 @@ class DummyRepo(OrderRepositoryPort):
         return order
     def delete(self, oid: int): self.store.pop(oid, None)
 
+    def find_active_sorted_orders(self) -> list[Order]:
+        return sorted(
+            [o for o in self.orders if o.status != OrderStatus.COMPLETED and o.active],
+            key=lambda o: (
+                {
+                    OrderStatus.READY: 1,
+                    OrderStatus.IN_PROGRESS: 2,
+                    OrderStatus.RECEIVED: 3,
+                }.get(o.status, 9999),
+                o.id,
+            ),
+        )
 
 class DummyCatalog:
     def __init__(self, stock=10, price=5):
