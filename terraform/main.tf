@@ -104,6 +104,11 @@ resource "aws_ecs_task_definition" "order_service" {
 }
 
 # ─────────── Service ───────────
+data "aws_ecs_service" "existing_service" {
+  cluster_arn  = aws_ecs_cluster.order_service_cluster.arn
+  service_name = "order-service"
+}
+
 resource "aws_ecs_service" "order_service" {
   count            = length(data.aws_ecs_service.existing_service.id) == 0 ? 1 : 0
   name             = "order-service"
