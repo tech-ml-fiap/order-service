@@ -36,10 +36,12 @@ jobs:
         terraform -chdir=terraform init
         terraform -chdir=terraform apply -auto-approve
 
-    - name: Export ECR URL (Terraform output)
-      id: tfout
+    - name: Export ECR URL
       run: |
-        echo "REPO_URL=$(terraform -chdir=terraform output -raw ecr_repository_url)" >> "$GITHUB_ENV"
+        # pega só a 1ª linha, remove \r\n e grava
+        REPO_URL=$(terraform -chdir=terraform output -raw ecr_repository_url | head -n1 | tr -d '\r')
+        echo "REPO_URL=$REPO_URL" >> "$GITHUB_ENV"
+
 
     - name: Login to ECR
       run: |
