@@ -3,10 +3,11 @@ from fastapi.testclient import TestClient
 from fastapi.security import HTTPAuthorizationCredentials
 
 import app.adapters.driver.controllers.order_controller as oc
-from app.shared.enums.order_status import OrderStatus
 from app.domain.entities.order import Order
 from app.domain.entities.item import OrderItem
+from app.shared.enums.order_status import OrderStatus
 
+# ------------------------------------------------------------------ helpers
 def _order(
     order_id: int = 1,
     status: OrderStatus = OrderStatus.RECEIVED,
@@ -21,102 +22,102 @@ def _order(
     )
 
 
-class _OK:
+# ------------------------------------------------------------------ stubs de domínio
+class _OKCreate:  # para CreateOrderService
     def __init__(self, *_, **__): ...
     def execute(self, *_, **__):
-        return _order(), "QR-CODE"
-
-    def verify_token(self, *_):
-        return 10
-    def create_payment(self, *_):
-        return "QR-CODE", None
+        return _order(), "QR-CODE"  # (Order, qr)
 
 
-class _ERR(_OK):
-    """Fake service que levanta falha de domínio."""
+class _OKGet:  # para Get/List services
+    def __init__(self, *_, **__): ...
+    def execute(self, *_, **__):
+        return _order()
+
+
+class _OKUpdate:
+    def __init__(self, *_, **__): ...
+    def execute(self, *_, **__):
+        return _order(status=OrderStatus.IN_PROGRESS)
+
+
+class _Err:
+    def __init__(self, *_, **__): ...
     def execute(self, *_, **__):
         raise ValueError("boom")
 
 
-class _NONE(_OK):
-    """Fake service que devolve None (not-found)."""
-    def execute(self, *_, **__):
-        return None
+# ------------------------------------------------------------------ dummies de gateways (HTTP)
+class _DummyPaymentGateway:
+    def __init__(self, *_, **__): ...
+    def create_payment(self, *_):        # usado em POST /orders
+        return "QR-DUMMY", None
+    def get_status(self, *_):            # usado em PATCH /orders/{id}/status
+        from app.shared.enums.payment_status import PaymentStatus
+        return PaymentStatus.PAID
 
 
+class _DummyAuthGateway:
+    def __init__(self, *_, **__): ...
+    def verify_token(self, *_):          # nunca falha nos testes
+        return 42
+
+
+# ------------------------------------------------------------------ wiring do FastAPI
 app = FastAPI()
 app.include_router(oc.router)
 
-app = FastAPI()
-app.include_router(oc.router)
-
-
+# ignora acesso ao banco
 app.dependency_overrides[oc.get_db_session] = lambda: None
 
+# stub global do bearer (sem token)
 class _FakeSecurity:
     async def __call__(self, *_, **__):
-
-        return None
-
+        return None  # ou HTTPAuthorizationCredentials("Bearer", "fake")
 
 oc.security = _FakeSecurity()
+
+# gateways HTTP padrão para qualquer rota que não seja monkey-patched
+oc.PaymentGatewayHttp = _DummyPaymentGateway
+oc.CustomerAuthHttp = _DummyAuthGateway
 
 client = TestClient(app)
 
 
-def _fake_security(auth: str | None = None):
-    if auth:
-        return HTTPAuthorizationCredentials(scheme="Bearer", credentials=auth)
-    return None
-
-oc.security.__call__ = lambda *_, **__: _fake_security(None)
-
-
-
+# ------------------------------------------------------------------ testes
 def test_create_order_ok(monkeypatch):
-    monkeypatch.setattr(oc, "CreateOrderService", lambda *_: _OK())
-    monkeypatch.setattr(oc, "PaymentGatewayHttp", lambda *_: _OK())
-    monkeypatch.setattr(oc, "CustomerAuthHttp", lambda *_: _OK())
-
+    monkeypatch.setattr(oc, "CreateOrderService", lambda *_: _OKCreate())
     resp = client.post("/orders", json={"items": [{"product_id": "P", "quantity": 1}]})
     assert resp.status_code == 201
-    assert resp.json()["qr_code"] == "QR-CODE"
-    assert resp.json()["items"][0]["name"] == "Burger"
+    body = resp.json()
+    assert body["qr_code"] == "QR-CODE"
+    assert body["items"][0]["name"] == "Burger"
 
 
 def test_create_order_error(monkeypatch):
-    monkeypatch.setattr(oc, "CreateOrderService", lambda *_: _ERR())
+    monkeypatch.setattr(oc, "CreateOrderService", lambda *_: _Err())
     resp = client.post("/orders", json={"items": [{"product_id": "P", "quantity": 1}]})
     assert resp.status_code == 400
     assert resp.json()["detail"] == "boom"
 
 
 def test_list_orders(monkeypatch):
-    class _List(_OK):
+    class _List(_OKGet):
         def execute(self, status=None, prioritized=False):
             assert status in (None, OrderStatus.READY)
             return [_order(status=status or OrderStatus.RECEIVED)]
 
     monkeypatch.setattr(oc, "ListOrdersService", lambda repo: _List())
 
-
+    # todos
     assert client.get("/orders").status_code == 200
-
+    # filtrado
     assert (
         client.get("/orders", params={"status": OrderStatus.READY.value}).status_code
         == 200
     )
-
-    monkeypatch.setattr(oc, "ListOrdersService", lambda repo: _List())
+    # ativos ordenados
     assert client.get("/orders/active").status_code == 200
-
-# ------------------------------------------------------------------ stubs
-
-class _OKGet:
-    """Imita Get/List services que devolvem Order(s) apenas."""
-    def __init__(self, *_, **__): ...
-    def execute(self, *_, **__):
-        return _order()
 
 
 def test_get_order_found(monkeypatch):
@@ -126,16 +127,16 @@ def test_get_order_found(monkeypatch):
 
 
 def test_get_order_not_found(monkeypatch):
-    monkeypatch.setattr(oc, "GetOrderByIdService", lambda repo: _NONE())
+    class _NoneSvc:
+        def __init__(self, *_, **__): ...
+        def execute(self, *_, **__): return None
+
+    monkeypatch.setattr(oc, "GetOrderByIdService", lambda repo: _NoneSvc())
     assert client.get("/orders/999").status_code == 404
 
 
 def test_update_status_ok(monkeypatch):
-    class _Update(_OK):
-        def execute(self, *_):
-            return _order(status=OrderStatus.IN_PROGRESS)
-
-    monkeypatch.setattr(oc, "UpdateOrderStatusService", lambda repo, pay: _Update())
+    monkeypatch.setattr(oc, "UpdateOrderStatusService", lambda repo, pay: _OKUpdate())
     resp = client.patch(
         "/orders/1/status", params={"status": OrderStatus.IN_PROGRESS.value}
     )
@@ -144,7 +145,7 @@ def test_update_status_ok(monkeypatch):
 
 
 def test_update_status_error(monkeypatch):
-    monkeypatch.setattr(oc, "UpdateOrderStatusService", lambda repo, pay: _ERR())
+    monkeypatch.setattr(oc, "UpdateOrderStatusService", lambda repo, pay: _Err())
     resp = client.patch(
         "/orders/1/status", params={"status": OrderStatus.IN_PROGRESS.value}
     )
