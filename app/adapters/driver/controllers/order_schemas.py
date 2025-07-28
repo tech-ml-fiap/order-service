@@ -29,6 +29,14 @@ class OrderOut(BaseModel):
     items: List[OrderItemOut]
     amount: float
 
+class OrderOutQrCode(BaseModel):
+    id: int
+    client_id: Optional[int]
+    qr_code: Optional[str]
+    status: OrderStatus
+    items: List[OrderItemOut]
+    amount: float
+
 
 class OrdersSummaryOut(BaseModel):
     total_orders: int
