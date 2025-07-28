@@ -5,3 +5,4 @@ class OrderStatus(str, PyEnum):
     IN_PROGRESS = "Em Preparação"
     READY = "Pronto"
     COMPLETED = "Finalizado"
+    CANCELED = "Cancelado"
