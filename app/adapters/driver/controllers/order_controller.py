@@ -11,7 +11,7 @@ from app.domain.services.list_order_service import ListOrdersService, GetOrderBy
 from app.domain.services.update_order_service import UpdateOrderStatusService
 from app.shared.enums.order_status import OrderStatus
 from database import get_db_session
-from .order_schemas import OrderIn, OrderOut, OrderItemOut
+from .order_schemas import OrderIn, OrderOut, OrderItemOut, OrdersSummaryOut
 
 router = APIRouter()
 
@@ -113,4 +113,29 @@ def _to_out(order: Order) -> OrderOut:
             )
             for i in order.items
         ],
+    )
+
+
+@router.get(
+    "/orders/summary",
+    response_model=OrdersSummaryOut,
+    summary="Resumo dos pedidos",
+    description="Retorna total de pedidos, soma dos valores e contagem por status."
+)
+def summarize_orders(
+    db: Session = Depends(get_db_session),
+):
+    orders = ListOrdersService(OrderRepository(db)).execute()
+
+    total_orders = len(orders)
+    total_amount = float(sum((o.amount or 0.0) for o in orders))
+
+    counts: dict[OrderStatus, int] = {s: 0 for s in OrderStatus}
+    for o in orders:
+        counts[o.status] = counts.get(o.status, 0) + 1
+
+    return OrdersSummaryOut(
+        total_orders=total_orders,
+        total_amount=total_amount,
+        by_status=counts,
     )
