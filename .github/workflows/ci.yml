@@ -32,7 +32,7 @@ jobs:
 
       - name: Run tests
         run: |
-          pytest --cov=. --cov-report=term --cov-report=xml --cov-fail-under=80 --disable-warnings -v
+          pytest --cov=app --cov-report=term --cov-report=xml --cov-fail-under=80 --disable-warnings -v
           echo "### Cobertura de testes" >> $GITHUB_STEP_SUMMARY
           coverage report >> $GITHUB_STEP_SUMMARY
           
@@ -42,6 +42,13 @@ jobs:
     needs: tests
     steps:
       - uses: actions/checkout@v4
+
+      - name: Write .coveragerc
+        run: |
+          echo "[run]" > .coveragerc
+          echo "source = app" >> .coveragerc
+          echo "relative_files = true" >> .coveragerc
+
 
       - name: SonarCloud Scan
         uses: sonarsource/sonarcloud-github-action@v2
