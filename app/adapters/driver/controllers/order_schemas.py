@@ -36,3 +36,9 @@ class OrderOutQrCode(BaseModel):
     status: OrderStatus
     items: List[OrderItemOut]
     amount: float
+
+
+class OrdersSummaryOut(BaseModel):
+    total_orders: int
+    total_amount: float
+    by_status: dict[OrderStatus, int]
