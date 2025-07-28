@@ -43,12 +43,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Write .coveragerc
+      - name: Check coverage file
         run: |
-          echo "[run]" > .coveragerc
-          echo "source = app" >> .coveragerc
-          echo "relative_files = true" >> .coveragerc
-
+          echo "Conteúdo de coverage.xml"
+          cat coverage.xml
 
       - name: SonarCloud Scan
         uses: sonarsource/sonarcloud-github-action@v2
