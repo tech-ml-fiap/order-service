@@ -1,5 +1,7 @@
+import os
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Header, Security
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 
 from app.adapters.driven.repositories.order import OrderRepository
@@ -11,19 +13,26 @@ from app.domain.services.list_order_service import ListOrdersService, GetOrderBy
 from app.domain.services.update_order_service import UpdateOrderStatusService
 from app.shared.enums.order_status import OrderStatus
 from database import get_db_session
-from .order_schemas import OrderIn, OrderOut, OrderItemOut
+from .order_schemas import OrderIn, OrderOut, OrderItemOut, OrderOutQrCode
+from ...driven.gateways.customer_auth_http import CustomerAuthHttp
+from ...driven.gateways.payment_status_http import PaymentGatewayHttp
 
 router = APIRouter()
 
-
-@router.post("/orders", response_model=OrderOut, status_code=status.HTTP_201_CREATED)
+security = HTTPBearer(auto_error=False)
+@router.post("/orders", response_model=OrderOutQrCode, status_code=status.HTTP_201_CREATED)
 def create_order(
     payload: OrderIn,
+    credentials: HTTPAuthorizationCredentials = Security(security),
     db: Session = Depends(get_db_session),
 ):
+    token = credentials.credentials if credentials else None
+
     order_repo = OrderRepository(db)
     catalog = ProductCatalogGateway()
-    service = CreateOrderService(order_repo, catalog)
+    payment_gateway = PaymentGatewayHttp(os.getenv("PAYMENT_SERVICE_URL"))
+    customer_auth = CustomerAuthHttp(os.getenv("CUSTOMER_SERVICE_URL"))
+    service = CreateOrderService(order_repo, catalog,payment_gateway,customer_auth )
 
     domain_order = Order(
         client_id=None,
@@ -34,11 +43,26 @@ def create_order(
     )
 
     try:
-        created = service.execute(domain_order)
+        order,qr_code = service.execute(domain_order,token = token)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
-    return _to_out(created)
+    return OrderOutQrCode(
+        id=order.id,
+        client_id=order.client_id,
+        status=order.status,
+        amount=order.amount,
+        qr_code=qr_code,
+        items=[
+            OrderItemOut(
+                product_id=i.product_id,
+                name=i.name,
+                quantity=i.quantity,
+                price=i.price,
+            )
+            for i in order.items
+        ],
+    )
 
 
 @router.get("/orders", response_model=List[OrderOut])
@@ -89,7 +113,8 @@ def update_order_status(
     db: Session = Depends(get_db_session),
 ):
     try:
-        updated = UpdateOrderStatusService(OrderRepository(db)).execute(
+        payment_port = PaymentGatewayHttp(os.getenv("PAYMENT_SERVICE_URL"))
+        updated = UpdateOrderStatusService(OrderRepository(db),payment_port).execute(
             order_id, status
         )
     except ValueError as e:
